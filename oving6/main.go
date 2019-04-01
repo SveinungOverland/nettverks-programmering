@@ -126,7 +126,7 @@ func createHandshakeResponse(encodedKey string) string {
 		"Connection":           "Upgrade",
 		"Sec-WebSocket-Accept": encodedKey,
 	}
-	return "HTTP/1.1 101 Switching Protocols\r\n" + mapToString(resp)
+	return "HTTP/1.1 101 Switching Protocols\r\n" + mapToString(resp) + "\r\n"
 }
 
 func mapToString(m map[string]string) string {
