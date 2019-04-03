@@ -5,13 +5,17 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"strings"
+
+	"app/frame"
 )
 
 func main() {
@@ -56,7 +60,69 @@ func handleConnection(c net.Conn) {
 	fmt.Println("Response")
 	fmt.Println(response)
 
+	// Write handshake to client
 	c.Write([]byte(response))
+
+	greeting := []byte("Hello!")
+	greetFrame := frame.Frame{
+		Opcode:   1,
+		IsMasked: false,
+		Length:   uint64(len(greeting)),
+		Payload:  greeting,
+	}
+
+	sendFrame(c, greetFrame)
+
+	fmt.Println("Trying to read a request")
+	for {
+		frame := readFrame(c)
+		fmt.Println(frame.Text())
+
+		sendFrame(c, frame)
+	}
+
+}
+
+func readFrame(c net.Conn) frame.Frame {
+	frame := frame.Frame{}
+	head := make([]byte, 2)
+	c.Read(head)
+
+	frame.IsFragment = (head[0] & 0x80) == 0x00
+	frame.Opcode = head[0] & 0x0F
+	frame.Reserved = (head[0] & 0x70)
+
+	frame.IsMasked = (head[1] & 0x80) == 0x80
+
+	var length uint64
+	length = uint64(head[1] & 0x7F)
+
+	if length == 126 {
+		bigLength := make([]byte, 2)
+		c.Read(bigLength)
+		length = uint64(binary.BigEndian.Uint16(bigLength))
+	} else if length == 127 {
+		huuuugeLength := make([]byte, 8)
+		c.Read(huuuugeLength)
+		length = uint64(binary.BigEndian.Uint64(huuuugeLength))
+	}
+
+	mask := make([]byte, 4)
+	c.Read(mask)
+
+	frame.Length = length
+
+	payload := make([]byte, length)
+	c.Read(payload)
+
+	// Decode the XOR cipher using the mask
+	for i := uint64(0); i < length; i++ {
+		payload[i] ^= mask[i%4]
+	}
+
+	frame.Payload = payload
+
+	return frame
 }
 
 func readRequest(c net.Conn, r map[string]string) error {
@@ -135,4 +201,31 @@ func mapToString(m map[string]string) string {
 		fmt.Fprintf(buffer, "%s: %s\r\n", k, v)
 	}
 	return buffer.String()
+}
+
+func sendFrame(c net.Conn, fr frame.Frame) {
+	data := make([]byte, 2)
+	data[0] = 0x80 | fr.Opcode
+	if fr.IsFragment {
+		data[0] &= 0x7F
+	}
+
+	if fr.Length <= 125 {
+		data[1] = byte(fr.Length)
+		data = append(data, fr.Payload...)
+	} else if fr.Length > 125 && float64(fr.Length) < math.Pow(2, 16) {
+		data[1] = byte(126)
+		size := make([]byte, 2)
+		binary.BigEndian.PutUint16(size, uint16(fr.Length))
+		data = append(data, size...)
+		data = append(data, fr.Payload...)
+	} else if float64(fr.Length) >= math.Pow(2, 16) {
+		data[1] = byte(127)
+		size := make([]byte, 8)
+		binary.BigEndian.PutUint64(size, fr.Length)
+		data = append(data, size...)
+		data = append(data, fr.Payload...)
+	}
+
+	c.Write(data)
 }
