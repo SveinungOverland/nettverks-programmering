@@ -1,14 +1,14 @@
 package main
 
 import (
-	"crypto"
 	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/asn1"
+	"crypto/sha1"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 )
 
@@ -43,41 +43,42 @@ L7oZWDeIi2pZS0NT7e8cZllAHgSuX8MW+wIDAQAB
 
 	publicKey := BytesToPublicKey(rsaKey)
 
-	hashed := sha256.Sum256(message)
+	fmt.Printf("%+v\n", publicKey)
 
-	err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hashed[:], signature)
-	if err != nil {
-		fmt.Println("Error from verification: ", err, " ::: ", "Message has been tampered with")
-	} else {
-		fmt.Println("Message is not tampered with!")
-	}
+	hashed := sha1.Sum(message)
+	m := new(big.Int)
+	m.SetBytes(signature)
+
+	encrypted := decrypt(new(big.Int), publicKey, m)
+
+	fmt.Println(hex.EncodeToString(hashed[:]))
+	fmt.Println(hex.EncodeToString(encrypted.Bytes()[235:]))
 
 	http.HandleFunc("/hello", HelloServer)
-	err = http.ListenAndServeTLS(":8080", "server.crt", "server.key", nil)
+	err := http.ListenAndServeTLS(":8080", "server.crt", "server.key", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
 }
 
 func BytesToPublicKey(pub []byte) *rsa.PublicKey {
-	block, _ := pem.Decode(pub)
-	var pk rsa.PublicKey
-	asn1.Unmarshal(block.Bytes, &pk)
-	return &pk
-
 	// block, _ := pem.Decode(pub)
-	// fmt.Printf("block: %+v\n", block)
+	// var pk rsa.PublicKey
+	// asn1.Unmarshal(block.Bytes, &pk)
+	// return &pk
 
-	// ifc, err := x509.ParsePKIXPublicKey(block.Bytes)
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
+	block, _ := pem.Decode(pub)
 
-	// fmt.Printf("ifc %+v\n", ifc)
+	key, err := x509.ParsePKCS1PublicKey(block.Bytes)
+	if err != nil {
+		fmt.Println(err)
+	}
 
-	// key, ok := ifc.(*rsa.PublicKey)
-	// if !ok {
-	// 	fmt.Println("Not ok")
-	// }
-	// return key
+	return key
+}
+
+func decrypt(c *big.Int, pub *rsa.PublicKey, m *big.Int) *big.Int {
+	e := big.NewInt(int64(pub.E))
+	c.Exp(m, e, pub.N)
+	return c
 }
